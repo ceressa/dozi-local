@@ -189,57 +189,226 @@ export default function UserDetailDrawer({ open, onClose, selectedUser }) {
 
   const displayUser = useMemo(() => details || selectedUser || {}, [details, selectedUser]);
 
-  // --- CİHAZ MODELİ BULUCU (Ajan Modu) - Memoized ---
+  // ReminderLog'lardan cihaz bilgilerini çıkar
+  const deviceInfoFromLogs = useMemo(() => {
+    if (!reminderLogs || reminderLogs.length === 0) return null;
+
+    // En son reminder log'dan cihaz bilgilerini al
+    for (let i = reminderLogs.length - 1; i >= 0; i--) {
+      const log = reminderLogs[i];
+      if (log.deviceInfo || log.device) {
+        const device = log.deviceInfo || log.device;
+        return {
+          model: device.model || device.deviceModel || device.brand,
+          manufacturer: device.manufacturer || device.brand,
+          osVersion: device.osVersion || device.systemVersion,
+          platform: device.platform || (device.osVersion ? 'Android' : null),
+          deviceId: device.deviceId || device.id
+        };
+      }
+      // Alternatif: direkt log içinde olabilir
+      if (log.model || log.deviceModel) {
+        return {
+          model: log.model || log.deviceModel,
+          manufacturer: log.manufacturer || log.brand,
+          osVersion: log.osVersion,
+          platform: log.platform,
+          deviceId: log.deviceId
+        };
+      }
+    }
+    return null;
+  }, [reminderLogs]);
+
+  // --- CİHAZ MODELİ BULUCU - ReminderLog'lardan da bak ---
   const getDeviceName = useCallback(() => {
     const u = displayUser;
-    // Tüm olası alanları kontrol ediyoruz
+    const d = deviceInfoFromLogs;
+
+    // Önce user'dan kontrol et
     if (u.deviceModel) return u.deviceModel;
-    if (u.model) return u.model; // Bazı sistemler direkt 'model' kaydeder
+    if (u.model) return u.model;
     if (u.productName) return u.productName;
     if (u.brand && u.product) return `${u.brand} ${u.product}`.toUpperCase();
     if (u.manufacturer && u.device) return `${u.manufacturer} ${u.device}`.toUpperCase();
 
+    // ReminderLog'lardan kontrol et
+    if (d) {
+      if (d.model && d.manufacturer) return `${d.manufacturer} ${d.model}`.toUpperCase();
+      if (d.model) return d.model.toUpperCase();
+      if (d.manufacturer) return d.manufacturer.toUpperCase();
+    }
+
     // Eğer hiçbiri yoksa ve sadece ID varsa
     if (u.deviceId) return `Bilinmeyen Cihaz (ID: ${u.deviceId.substring(0, 6)}...)`;
+    if (d?.deviceId) return `Bilinmeyen Cihaz (ID: ${d.deviceId.substring(0, 6)}...)`;
 
     return "Cihaz Bilgisi Yok";
-  }, [displayUser]);
+  }, [displayUser, deviceInfoFromLogs]);
 
   const getOSInfo = useCallback(() => {
-    if (displayUser.osVersion) return `Android ${displayUser.osVersion}`;
-    if (displayUser.platform) return displayUser.platform; // 'iOS' veya 'Android'
-    return "Bilinmiyor";
-  }, [displayUser]);
+    const u = displayUser;
+    const d = deviceInfoFromLogs;
 
-  // --- TABLO: HATIRLATMA ANALİZİ - Memoized ---
+    // User'dan kontrol et
+    if (u.osVersion) return `Android ${u.osVersion}`;
+    if (u.platform) return u.platform;
+
+    // ReminderLog'lardan kontrol et
+    if (d) {
+      if (d.osVersion && d.platform === 'Android') return `Android ${d.osVersion}`;
+      if (d.osVersion) return `Version ${d.osVersion}`;
+      if (d.platform) return d.platform;
+    }
+
+    return "Bilinmiyor";
+  }, [displayUser, deviceInfoFromLogs]);
+
+  // Reminder Logs analizi - grupla ve anlamlı hale getir
+  const reminderAnalysis = useMemo(() => {
+    if (!reminderLogs || reminderLogs.length === 0) return { groups: [], stats: {} };
+
+    // İstatistikler
+    const stats = {
+      totalNotifications: 0,
+      delivered: 0,
+      read: 0,
+      snoozed: 0,
+      taken: 0,
+      missed: 0,
+      escalated: 0
+    };
+
+    reminderLogs.forEach(log => {
+      const type = (log.eventType || log.type || '').toUpperCase();
+
+      if (type.includes('NOTIFICATION_SENT') || type.includes('SENT')) stats.totalNotifications++;
+      if (type.includes('DELIVERED')) stats.delivered++;
+      if (type.includes('READ') || type.includes('OPENED')) stats.read++;
+      if (type.includes('SNOOZE')) stats.snoozed++;
+      if (type === 'TAKEN' || type.includes('MEDICATION_TAKEN')) stats.taken++;
+      if (type === 'MISSED' || type.includes('MEDICATION_MISSED')) stats.missed++;
+      if (type.includes('ESCALATION')) stats.escalated++;
+    });
+
+    return { groups: reminderLogs, stats };
+  }, [reminderLogs]);
+
+  // --- TABLO: HATIRLATMA ANALİZİ - Geliştirilmiş ---
   const reminderColumns = useMemo(() => [
-    { field: 'createdAt', headerName: 'İşlem Zamanı', width: 150, valueFormatter: (params) => formatDate(params.value) },
-    { field: 'medicineName', headerName: 'İlaç', width: 140, valueGetter: (params) => params.row.medicineName || params.row.medName || '-' },
     {
-      field: 'eventType', headerName: 'Olay', width: 190,
+      field: 'createdAt',
+      headerName: 'Zaman',
+      width: 160,
+      valueFormatter: (params) => formatDate(params.value)
+    },
+    {
+      field: 'medicineName',
+      headerName: 'İlaç',
+      width: 140,
+      valueGetter: (params) => params.row.medicineName || params.row.medName || params.row.medicine?.name || '-'
+    },
+    {
+      field: 'eventType',
+      headerName: 'Durum',
+      width: 220,
       renderCell: (params) => {
-        const type = params.value || "UNKNOWN";
-        // Ham verileri okunabilir hale getiriyoruz
-        if (type.includes("SNOOZE")) return <Chip icon={<Snooze />} label="Ertelendi" color="warning" size="small" variant="outlined" />;
-        if (type.includes("ESCALATION")) return <Chip icon={<TrendingUp />} label="Eskalasyon" color="error" size="small" variant="outlined" />;
-        if (type.includes("ALARM") || type === "REMINDER_TRIGGERED") return <Chip icon={<NotificationsActive />} label="Alarm Çaldı" color="info" size="small" variant="outlined" />;
-        if (type === "NOTIFICATION_SENT") return <Chip icon={<CheckCircle />} label="Bildirim Gitti" color="success" size="small" variant="outlined" />;
-        if (type === "REMINDER_UPDATED") return <Chip icon={<Update />} label="Saat Güncellendi" size="small" variant="outlined" />;
-        if (type === "TAKEN") return <Chip icon={<CheckCircle />} label="Alındı" color="success" size="small" />;
-        if (type === "MISSED") return <Chip icon={<Cancel />} label="Kaçırıldı" color="error" size="small" />;
+        const type = (params.value || params.row.type || "UNKNOWN").toUpperCase();
+        const success = params.row.success;
+        const error = params.row.error;
+
+        // Bildirim durumları
+        if (type.includes('NOTIFICATION_SENT') || type.includes('SENT')) {
+          if (success === false || error) {
+            return <Chip icon={<Cancel />} label="Bildirim Gönderilemedi" color="error" size="small" />;
+          }
+          return <Chip icon={<CheckCircle />} label="Bildirim Gönderildi" color="success" size="small" />;
+        }
+        if (type.includes('DELIVERED')) {
+          return <Chip icon={<CheckCircle />} label="Cihaza Ulaştı" color="success" size="small" variant="outlined" />;
+        }
+        if (type.includes('READ') || type.includes('OPENED')) {
+          return <Chip icon={<CheckCircle />} label="Kullanıcı Gördü" color="info" size="small" />;
+        }
+
+        // Kullanıcı eylemleri
+        if (type.includes("SNOOZE")) {
+          return <Chip icon={<Snooze />} label="Kullanıcı Erteledi" color="warning" size="small" />;
+        }
+        if (type === "TAKEN" || type.includes("MEDICATION_TAKEN")) {
+          return <Chip icon={<CheckCircle />} label="İlaç Alındı ✓" color="success" size="small" sx={{ fontWeight: 'bold' }} />;
+        }
+        if (type === "SKIPPED" || type.includes("MEDICATION_SKIPPED")) {
+          return <Chip icon={<Cancel />} label="Kullanıcı Atladı" color="warning" size="small" />;
+        }
+        if (type === "MISSED" || type.includes("MEDICATION_MISSED")) {
+          return <Chip icon={<Cancel />} label="Kaçırıldı ✗" color="error" size="small" sx={{ fontWeight: 'bold' }} />;
+        }
+
+        // Sistem olayları
+        if (type.includes("ESCALATION")) {
+          return <Chip icon={<TrendingUp />} label="Eskalasyon (Acil)" color="error" size="small" variant="outlined" />;
+        }
+        if (type.includes("ALARM") || type === "REMINDER_TRIGGERED") {
+          return <Chip icon={<NotificationsActive />} label="Alarm Tetiklendi" color="info" size="small" variant="outlined" />;
+        }
+        if (type === "REMINDER_UPDATED") {
+          return <Chip icon={<Update />} label="Hatırlatıcı Güncellendi" size="small" variant="outlined" />;
+        }
 
         return <Chip label={type} size="small" />;
       }
     },
     {
-      field: 'description', headerName: 'Teknik Detay', width: 250, flex: 1,
-      valueGetter: (params) => {
-        // "Teknik Detay" için olası tüm alanları kontrol et
-        return params.row.description
+      field: 'channel',
+      headerName: 'Kanal',
+      width: 120,
+      renderCell: (params) => {
+        const channel = params.row.channel || params.row.notificationChannel;
+        if (!channel) return '-';
+
+        const channelColors = {
+          'FCM': 'primary',
+          'PUSH': 'primary',
+          'SMS': 'secondary',
+          'EMAIL': 'info',
+          'IN_APP': 'default'
+        };
+
+        return <Chip label={channel} size="small" color={channelColors[channel] || 'default'} variant="outlined" />;
+      }
+    },
+    {
+      field: 'details',
+      headerName: 'Detay',
+      flex: 1,
+      minWidth: 200,
+      renderCell: (params) => {
+        const detail = params.row.description
           || params.row.details
+          || params.row.message
           || params.row.error
           || params.row.reason
-          || (params.row.payload ? JSON.stringify(params.row.payload) : '-')
+          || (params.row.payload ? JSON.stringify(params.row.payload).substring(0, 100) : null);
+
+        if (!detail) return <Typography variant="caption" color="text.secondary">-</Typography>;
+
+        return (
+          <Tooltip title={detail}>
+            <Typography
+              variant="caption"
+              sx={{
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+                maxWidth: '100%',
+                display: 'block'
+              }}
+            >
+              {detail}
+            </Typography>
+          </Tooltip>
+        );
       }
     }
   ], []);
@@ -351,13 +520,17 @@ export default function UserDetailDrawer({ open, onClose, selectedUser }) {
                 <Grid item xs={6} sm={3}>
                     <Box sx={{ p: 1.5, bgcolor: 'secondary.light', color: 'secondary.contrastText', borderRadius: 2 }}>
                         <Typography variant="caption" sx={{ opacity: 0.8 }} display="block">Premium Başlangıç</Typography>
-                        <Typography variant="body2" fontWeight="600">{formatDate(displayUser.premiumStartDate)}</Typography>
+                        <Typography variant="body2" fontWeight="600">
+                          {formatDate(displayUser.premiumStartDate || displayUser.premiumStart || displayUser.subscriptionStart)}
+                        </Typography>
                     </Box>
                 </Grid>
                 <Grid item xs={6} sm={3}>
                     <Box sx={{ p: 1.5, bgcolor: 'secondary.main', color: 'secondary.contrastText', borderRadius: 2 }}>
                         <Typography variant="caption" sx={{ opacity: 0.8 }} display="block">Premium Bitiş</Typography>
-                        <Typography variant="body2" fontWeight="600">{formatDate(displayUser.premiumEndDate)}</Typography>
+                        <Typography variant="body2" fontWeight="600">
+                          {formatDate(displayUser.premiumEndDate || displayUser.premiumEnd || displayUser.subscriptionEnd)}
+                        </Typography>
                     </Box>
                 </Grid>
                 </>
@@ -520,10 +693,55 @@ export default function UserDetailDrawer({ open, onClose, selectedUser }) {
 
                 {/* 4. HATIRLATMA ANALİZİ */}
                 <CustomTabPanel value={tabIndex} index={3}>
-                     <Alert severity="info" sx={{ mb: 2 }}>
-                        Sistemin gönderdiği bildirimler ve kullanıcının teknik tepkileri (Alarm, Erteleme, Bildirim İletimi).
+                     <Alert severity="info" sx={{ mb: 2 }} icon={<NotificationsActive />}>
+                        Bildirim akışı ve kullanıcı etkileşimleri. Her satır bir bildirimin durumunu gösterir.
                      </Alert>
-                     <Card sx={{ height: 600, borderRadius: 2 }}>
+
+                     {/* İstatistik Kartları */}
+                     <Grid container spacing={2} sx={{ mb: 2 }}>
+                        <Grid item xs={6} sm={4} md={2}>
+                          <Card sx={{ p: 2, textAlign: 'center', bgcolor: 'primary.light', color: 'primary.contrastText' }}>
+                            <Typography variant="h4" fontWeight="bold">{reminderAnalysis.stats.totalNotifications}</Typography>
+                            <Typography variant="caption">Gönderilen Bildirim</Typography>
+                          </Card>
+                        </Grid>
+                        <Grid item xs={6} sm={4} md={2}>
+                          <Card sx={{ p: 2, textAlign: 'center', bgcolor: 'success.light', color: 'success.contrastText' }}>
+                            <Typography variant="h4" fontWeight="bold">{reminderAnalysis.stats.taken}</Typography>
+                            <Typography variant="caption">İlaç Alındı</Typography>
+                          </Card>
+                        </Grid>
+                        <Grid item xs={6} sm={4} md={2}>
+                          <Card sx={{ p: 2, textAlign: 'center', bgcolor: 'error.light', color: 'error.contrastText' }}>
+                            <Typography variant="h4" fontWeight="bold">{reminderAnalysis.stats.missed}</Typography>
+                            <Typography variant="caption">Kaçırıldı</Typography>
+                          </Card>
+                        </Grid>
+                        <Grid item xs={6} sm={4} md={2}>
+                          <Card sx={{ p: 2, textAlign: 'center', bgcolor: 'warning.light', color: 'warning.contrastText' }}>
+                            <Typography variant="h4" fontWeight="bold">{reminderAnalysis.stats.snoozed}</Typography>
+                            <Typography variant="caption">Ertelendi</Typography>
+                          </Card>
+                        </Grid>
+                        <Grid item xs={6} sm={4} md={2}>
+                          <Card sx={{ p: 2, textAlign: 'center', bgcolor: 'info.light', color: 'info.contrastText' }}>
+                            <Typography variant="h4" fontWeight="bold">{reminderAnalysis.stats.read}</Typography>
+                            <Typography variant="caption">Görüldü</Typography>
+                          </Card>
+                        </Grid>
+                        <Grid item xs={6} sm={4} md={2}>
+                          <Card sx={{ p: 2, textAlign: 'center', bgcolor: 'secondary.light', color: 'secondary.contrastText' }}>
+                            <Typography variant="h4" fontWeight="bold">
+                              {reminderAnalysis.stats.delivered > 0
+                                ? `${Math.round((reminderAnalysis.stats.delivered / reminderAnalysis.stats.totalNotifications) * 100)}%`
+                                : '-'}
+                            </Typography>
+                            <Typography variant="caption">Teslimat Oranı</Typography>
+                          </Card>
+                        </Grid>
+                     </Grid>
+
+                     <Card sx={{ height: 550, borderRadius: 2 }}>
                         <DataGrid
                             rows={reminderLogs.map((l, i) => ({ id: l.id || i, ...l }))}
                             columns={reminderColumns}
@@ -531,7 +749,7 @@ export default function UserDetailDrawer({ open, onClose, selectedUser }) {
                                 sorting: { sortModel: [{ field: 'createdAt', sort: 'desc' }] },
                                 pagination: { paginationModel: { pageSize: 50 } }
                             }}
-                            pageSizeOptions={[50, 100]}
+                            pageSizeOptions={[25, 50, 100]}
                             disableRowSelectionOnClick
                             density="comfortable"
                         />
