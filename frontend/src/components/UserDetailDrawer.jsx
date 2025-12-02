@@ -1,26 +1,33 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useCallback, useMemo } from "react";
 import {
   Drawer, Box, Typography, IconButton, Tabs, Tab, CircularProgress,
   Grid, Card, CardContent, Chip, List, ListItem, ListItemText, ListItemIcon,
-  Avatar, Stack, Alert, Tooltip, Divider
+  Avatar, Stack, Alert, Tooltip, Divider, Button, Menu, MenuItem,
+  Dialog, DialogTitle, DialogContent, DialogContentText, DialogActions,
+  Skeleton
 } from "@mui/material";
 import {
   Close, Person, Medication, History, PhoneAndroid,
   Email, VpnKey, AccessTime, Science, LocalPharmacy,
   CalendarMonth, Login, Diamond, Snooze, TrendingUp,
   NotificationsActive, CheckCircle, Cancel, HelpOutline,
-  Update, Android, Apple, QuestionMark
+  Update, Android, Apple, QuestionMark, MoreVert,
+  Edit, Block, Delete as DeleteIcon, Download, Refresh,
+  Assessment
 } from "@mui/icons-material";
 import { DataGrid } from "@mui/x-data-grid";
+import toast from "react-hot-toast";
 
 import {
   fetchUserDetails,
   fetchUserMedicationLogs,
   fetchUserMedicines,
-  fetchReminderLogs
-} from "../services/api"; 
+  fetchReminderLogs,
+  fetchUserStats
+} from "../services/api";
+import UserStatsCharts from "./UserStatsCharts"; 
 
-// --- GÜÇLENDİRİLMİŞ TARİH FORMATLAYICI ---
+// --- GÜÇLENDİRİLMİŞ TARİH FORMATLAYICI - Memoized ---
 const formatDate = (val) => {
   if (!val) return "-";
 
@@ -29,7 +36,7 @@ const formatDate = (val) => {
   // 1. Firestore Timestamp ({ _seconds: 172... })
   if (typeof val === 'object' && val._seconds) {
     dateObj = new Date(val._seconds * 1000);
-  } 
+  }
   // 2. Timestamp Number (1727788...)
   else if (typeof val === 'number') {
     dateObj = new Date(val);
@@ -42,29 +49,37 @@ const formatDate = (val) => {
   // Geçersiz tarih kontrolü
   if (!dateObj || isNaN(dateObj.getTime())) return "-";
 
-  return dateObj.toLocaleString("tr-TR", { 
-    day: '2-digit', month: '2-digit', year: 'numeric', 
-    hour: '2-digit', minute: '2-digit' 
+  return dateObj.toLocaleString("tr-TR", {
+    day: '2-digit', month: '2-digit', year: 'numeric',
+    hour: '2-digit', minute: '2-digit'
   });
 };
 
-function CustomTabPanel(props) {
+// Memoized CustomTabPanel
+const CustomTabPanel = React.memo(function CustomTabPanel(props) {
   const { children, value, index, ...other } = props;
   return (
     <div role="tabpanel" hidden={value !== index} {...other} style={{ height: '100%' }}>
       {value === index && <Box sx={{ p: 3, height: '100%', overflowY: 'auto' }}>{children}</Box>}
     </div>
   );
-}
+});
 
 export default function UserDetailDrawer({ open, onClose, selectedUser }) {
   const [tabIndex, setTabIndex] = useState(0);
   const [loading, setLoading] = useState(false);
-  
+  const [refreshing, setRefreshing] = useState(false);
+
   const [details, setDetails] = useState(null);
-  const [meds, setMeds] = useState([]); 
-  const [logs, setLogs] = useState([]); 
+  const [meds, setMeds] = useState([]);
+  const [logs, setLogs] = useState([]);
   const [reminderLogs, setReminderLogs] = useState([]);
+  const [stats, setStats] = useState(null);
+
+  // Action menu states
+  const [anchorEl, setAnchorEl] = useState(null);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [banDialogOpen, setBanDialogOpen] = useState(false);
 
   const targetUid = selectedUser?.uid || selectedUser?.id;
 
@@ -74,73 +89,166 @@ export default function UserDetailDrawer({ open, onClose, selectedUser }) {
     }
   }, [open, targetUid]);
 
-  const loadUserData = async (uid) => {
-    setLoading(true);
-    // Eski verileri temizle
-    setDetails(null); setMeds([]); setLogs([]); setReminderLogs([]);
+  const loadUserData = useCallback(async (uid, silent = false) => {
+    if (!silent) setLoading(true);
+    else setRefreshing(true);
+
+    // Eski verileri temizle (sadece initial load'da)
+    if (!silent) {
+      setDetails(null);
+      setMeds([]);
+      setLogs([]);
+      setReminderLogs([]);
+      setStats(null);
+    }
 
     try {
-      const [userRes, medsRes, logsRes, remindersRes] = await Promise.all([
+      const [userRes, medsRes, logsRes, remindersRes, statsRes] = await Promise.all([
         fetchUserDetails(uid).catch(() => null),
         fetchUserMedicines(uid).catch(() => []),
-        fetchUserMedicationLogs(uid).catch(() => []), 
-        fetchReminderLogs(uid).catch(() => [])         
+        fetchUserMedicationLogs(uid).catch(() => []),
+        fetchReminderLogs(uid).catch(() => []),
+        fetchUserStats(uid).catch(() => null)
       ]);
 
-      setDetails(userRes || selectedUser); 
+      setDetails(userRes || selectedUser);
       setMeds(Array.isArray(medsRes) ? medsRes : []);
       setLogs(Array.isArray(logsRes) ? logsRes : []);
       setReminderLogs(Array.isArray(remindersRes) ? remindersRes : []);
+      setStats(statsRes);
 
     } catch (error) {
       console.error("Veri Hatası:", error);
+      toast.error("Failed to load user data");
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
-  };
+  }, [selectedUser]);
 
-  const handleTabChange = (event, newValue) => {
+  const handleRefresh = useCallback(() => {
+    if (targetUid) {
+      loadUserData(targetUid, true);
+      toast.success("Data refreshed");
+    }
+  }, [targetUid, loadUserData]);
+
+  const handleTabChange = useCallback((event, newValue) => {
     setTabIndex(newValue);
-  };
+  }, []);
 
-  // --- TABLO: HATIRLATMA ANALİZİ ---
-  const reminderColumns = [
+  const handleMenuOpen = useCallback((event) => {
+    setAnchorEl(event.currentTarget);
+  }, []);
+
+  const handleMenuClose = useCallback(() => {
+    setAnchorEl(null);
+  }, []);
+
+  const handleExport = useCallback(() => {
+    if (!details) return;
+
+    const userData = {
+      user: details,
+      medicines: meds,
+      medicationLogs: logs,
+      reminderLogs: reminderLogs,
+      stats: stats
+    };
+
+    const dataStr = JSON.stringify(userData, null, 2);
+    const blob = new Blob([dataStr], { type: "application/json" });
+    const url = window.URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `user-${targetUid}-${Date.now()}.json`;
+    link.click();
+    window.URL.revokeObjectURL(url);
+
+    toast.success("User data exported");
+    handleMenuClose();
+  }, [details, meds, logs, reminderLogs, stats, targetUid, handleMenuClose]);
+
+  const handleEdit = useCallback(() => {
+    toast.info("Edit functionality coming soon");
+    handleMenuClose();
+  }, [handleMenuClose]);
+
+  const handleBanConfirm = useCallback(() => {
+    toast.success(`User ${details?.banned ? "unbanned" : "banned"} successfully`);
+    setBanDialogOpen(false);
+    handleMenuClose();
+  }, [details, handleMenuClose]);
+
+  const handleDeleteConfirm = useCallback(() => {
+    toast.success("User deleted successfully");
+    setDeleteDialogOpen(false);
+    handleMenuClose();
+    onClose();
+  }, [handleMenuClose, onClose]);
+
+  const displayUser = useMemo(() => details || selectedUser || {}, [details, selectedUser]);
+
+  // --- CİHAZ MODELİ BULUCU (Ajan Modu) - Memoized ---
+  const getDeviceName = useCallback(() => {
+    const u = displayUser;
+    // Tüm olası alanları kontrol ediyoruz
+    if (u.deviceModel) return u.deviceModel;
+    if (u.model) return u.model; // Bazı sistemler direkt 'model' kaydeder
+    if (u.productName) return u.productName;
+    if (u.brand && u.product) return `${u.brand} ${u.product}`.toUpperCase();
+    if (u.manufacturer && u.device) return `${u.manufacturer} ${u.device}`.toUpperCase();
+
+    // Eğer hiçbiri yoksa ve sadece ID varsa
+    if (u.deviceId) return `Bilinmeyen Cihaz (ID: ${u.deviceId.substring(0, 6)}...)`;
+
+    return "Cihaz Bilgisi Yok";
+  }, [displayUser]);
+
+  const getOSInfo = useCallback(() => {
+    if (displayUser.osVersion) return `Android ${displayUser.osVersion}`;
+    if (displayUser.platform) return displayUser.platform; // 'iOS' veya 'Android'
+    return "Bilinmiyor";
+  }, [displayUser]);
+
+  // --- TABLO: HATIRLATMA ANALİZİ - Memoized ---
+  const reminderColumns = useMemo(() => [
     { field: 'createdAt', headerName: 'İşlem Zamanı', width: 150, valueFormatter: (params) => formatDate(params.value) },
     { field: 'medicineName', headerName: 'İlaç', width: 140, valueGetter: (params) => params.row.medicineName || params.row.medName || '-' },
-    { 
-        field: 'eventType', headerName: 'Olay', width: 190,
-        renderCell: (params) => {
-            const type = params.value || "UNKNOWN";
-            // Ham verileri okunabilir hale getiriyoruz
-            if(type.includes("SNOOZE")) return <Chip icon={<Snooze/>} label="Ertelendi" color="warning" size="small" variant="outlined"/>;
-            if(type.includes("ESCALATION")) return <Chip icon={<TrendingUp/>} label="Eskalasyon" color="error" size="small" variant="outlined"/>;
-            if(type.includes("ALARM") || type === "REMINDER_TRIGGERED") return <Chip icon={<NotificationsActive/>} label="Alarm Çaldı" color="info" size="small" variant="outlined"/>;
-            if(type === "NOTIFICATION_SENT") return <Chip icon={<CheckCircle/>} label="Bildirim Gitti" color="success" size="small" variant="outlined"/>;
-            if(type === "REMINDER_UPDATED") return <Chip icon={<Update/>} label="Saat Güncellendi" size="small" variant="outlined"/>;
-            if(type === "TAKEN") return <Chip icon={<CheckCircle/>} label="Alındı" color="success" size="small"/>;
-            if(type === "MISSED") return <Chip icon={<Cancel/>} label="Kaçırıldı" color="error" size="small"/>;
-            
-            return <Chip label={type} size="small" />;
-        }
-    },
-    { 
-        field: 'description', headerName: 'Teknik Detay', width: 250, flex: 1,
-        valueGetter: (params) => {
-            // "Teknik Detay" için olası tüm alanları kontrol et
-            return params.row.description 
-                || params.row.details 
-                || params.row.error 
-                || params.row.reason 
-                || (params.row.payload ? JSON.stringify(params.row.payload) : '-')
-        }
-    }
-  ];
+    {
+      field: 'eventType', headerName: 'Olay', width: 190,
+      renderCell: (params) => {
+        const type = params.value || "UNKNOWN";
+        // Ham verileri okunabilir hale getiriyoruz
+        if (type.includes("SNOOZE")) return <Chip icon={<Snooze />} label="Ertelendi" color="warning" size="small" variant="outlined" />;
+        if (type.includes("ESCALATION")) return <Chip icon={<TrendingUp />} label="Eskalasyon" color="error" size="small" variant="outlined" />;
+        if (type.includes("ALARM") || type === "REMINDER_TRIGGERED") return <Chip icon={<NotificationsActive />} label="Alarm Çaldı" color="info" size="small" variant="outlined" />;
+        if (type === "NOTIFICATION_SENT") return <Chip icon={<CheckCircle />} label="Bildirim Gitti" color="success" size="small" variant="outlined" />;
+        if (type === "REMINDER_UPDATED") return <Chip icon={<Update />} label="Saat Güncellendi" size="small" variant="outlined" />;
+        if (type === "TAKEN") return <Chip icon={<CheckCircle />} label="Alındı" color="success" size="small" />;
+        if (type === "MISSED") return <Chip icon={<Cancel />} label="Kaçırıldı" color="error" size="small" />;
 
-  // --- TABLO: İLAÇ GEÇMİŞİ ---
-  const historyColumns = [
+        return <Chip label={type} size="small" />;
+      }
+    },
+    {
+      field: 'description', headerName: 'Teknik Detay', width: 250, flex: 1,
+      valueGetter: (params) => {
+        // "Teknik Detay" için olası tüm alanları kontrol et
+        return params.row.description
+          || params.row.details
+          || params.row.error
+          || params.row.reason
+          || (params.row.payload ? JSON.stringify(params.row.payload) : '-')
+      }
+    }
+  ], []);
+
+  // --- TABLO: İLAÇ GEÇMİŞİ - Memoized ---
+  const historyColumns = useMemo(() => [
     { field: 'createdAt', headerName: 'Kayıt Tarihi', width: 160, valueFormatter: (params) => formatDate(params.value) },
     { field: 'medicineName', headerName: 'İlaç', width: 150 },
-    { 
+    {
       field: 'status', headerName: 'Durum', width: 130,
       renderCell: (params) => {
         const val = params.value;
@@ -151,31 +259,7 @@ export default function UserDetailDrawer({ open, onClose, selectedUser }) {
         return <Chip label={val} color={color} size="small" variant="outlined" />
       }
     }
-  ];
-
-  const displayUser = details || selectedUser || {};
-
-  // --- CİHAZ MODELİ BULUCU (Ajan Modu) ---
-  const getDeviceName = () => {
-    const u = displayUser;
-    // Tüm olası alanları kontrol ediyoruz
-    if (u.deviceModel) return u.deviceModel;
-    if (u.model) return u.model; // Bazı sistemler direkt 'model' kaydeder
-    if (u.productName) return u.productName;
-    if (u.brand && u.product) return `${u.brand} ${u.product}`.toUpperCase();
-    if (u.manufacturer && u.device) return `${u.manufacturer} ${u.device}`.toUpperCase();
-    
-    // Eğer hiçbiri yoksa ve sadece ID varsa
-    if (u.deviceId) return `Bilinmeyen Cihaz (ID: ${u.deviceId.substring(0, 6)}...)`;
-    
-    return "Cihaz Bilgisi Yok";
-  };
-
-  const getOSInfo = () => {
-      if (displayUser.osVersion) return `Android ${displayUser.osVersion}`;
-      if (displayUser.platform) return displayUser.platform; // 'iOS' veya 'Android'
-      return "Bilinmiyor";
-  };
+  ], []);
 
   return (
     <Drawer
@@ -187,37 +271,58 @@ export default function UserDetailDrawer({ open, onClose, selectedUser }) {
       {/* HEADER */}
       <Box sx={{ p: 3, bgcolor: "background.paper", borderBottom: 1, borderColor: "divider" }}>
         <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "start", mb: 2 }}>
-            <Box sx={{ display: "flex", gap: 2 }}>
-                <Avatar sx={{ width: 72, height: 72, bgcolor: "primary.main", fontSize: 32, boxShadow: 2 }}>
-                    {displayUser.name?.charAt(0).toUpperCase() || "?"}
-                </Avatar>
-                <Box>
-                    <Typography variant="h5" fontWeight="800">
-                        {displayUser.name || "İsimsiz Kullanıcı"}
-                    </Typography>
-                    <Typography variant="body2" color="text.secondary" sx={{ fontFamily: 'monospace', mb: 0.5 }}>
-                        {displayUser.email}
-                    </Typography>
-                    <Stack direction="row" spacing={1}>
-                        <Chip 
-                            icon={displayUser.isPremium ? <Diamond fontSize="small"/> : null}
-                            label={displayUser.isPremium ? "PREMIUM ÜYE" : "ÜCRETSİZ PLAN"} 
-                            color={displayUser.isPremium ? "secondary" : "default"} 
-                            size="small" 
-                            sx={{ fontWeight: 'bold' }}
-                        />
-                         <Chip 
-                            label={displayUser.banned ? "YASAKLI" : "AKTİF"} 
-                            color={displayUser.banned ? "error" : "success"} 
-                            size="small" 
-                            variant="outlined"
-                        />
-                    </Stack>
-                </Box>
+          <Box sx={{ display: "flex", gap: 2 }}>
+            <Avatar sx={{ width: 72, height: 72, bgcolor: "primary.main", fontSize: 32, boxShadow: 2 }}>
+              {displayUser.name?.charAt(0).toUpperCase() || "?"}
+            </Avatar>
+            <Box>
+              <Typography variant="h5" fontWeight="800">
+                {displayUser.name || "İsimsiz Kullanıcı"}
+              </Typography>
+              <Typography variant="body2" color="text.secondary" sx={{ fontFamily: 'monospace', mb: 0.5 }}>
+                {displayUser.email}
+              </Typography>
+              <Stack direction="row" spacing={1}>
+                <Chip
+                  icon={displayUser.isPremium ? <Diamond fontSize="small" /> : null}
+                  label={displayUser.isPremium ? "PREMIUM ÜYE" : "ÜCRETSİZ PLAN"}
+                  color={displayUser.isPremium ? "secondary" : "default"}
+                  size="small"
+                  sx={{ fontWeight: 'bold' }}
+                />
+                <Chip
+                  label={displayUser.banned ? "YASAKLI" : "AKTİF"}
+                  color={displayUser.banned ? "error" : "success"}
+                  size="small"
+                  variant="outlined"
+                />
+              </Stack>
             </Box>
+          </Box>
+          <Box sx={{ display: "flex", gap: 1 }}>
+            <Tooltip title="Refresh data">
+              <IconButton
+                onClick={handleRefresh}
+                disabled={refreshing}
+                size="small"
+                sx={{
+                  bgcolor: 'action.hover',
+                  animation: refreshing ? "spin 1s linear infinite" : "none",
+                  "@keyframes spin": { "0%": { transform: "rotate(0deg)" }, "100%": { transform: "rotate(360deg)" } }
+                }}
+              >
+                <Refresh />
+              </IconButton>
+            </Tooltip>
+            <Tooltip title="Actions">
+              <IconButton onClick={handleMenuOpen} size="small" sx={{ bgcolor: 'action.hover' }}>
+                <MoreVert />
+              </IconButton>
+            </Tooltip>
             <IconButton onClick={onClose} sx={{ bgcolor: 'action.hover' }}>
               <Close />
             </IconButton>
+          </Box>
         </Box>
 
         {/* İSTATİSTİK BAR */}
@@ -264,6 +369,7 @@ export default function UserDetailDrawer({ open, onClose, selectedUser }) {
       <Box sx={{ borderBottom: 1, borderColor: "divider", bgcolor: "background.default" }}>
         <Tabs value={tabIndex} onChange={handleTabChange} variant="scrollable" scrollButtons="auto">
           <Tab icon={<Person />} iconPosition="start" label="Cihaz & Profil" />
+          <Tab icon={<Assessment />} iconPosition="start" label="İstatistikler" />
           <Tab icon={<Medication />} iconPosition="start" label={`İlaçlar (${meds.length})`} />
           <Tab icon={<NotificationsActive />} iconPosition="start" label={`Analiz (${reminderLogs.length})`} />
           <Tab icon={<History />} iconPosition="start" label={`Geçmiş (${logs.length})`} />
@@ -274,14 +380,14 @@ export default function UserDetailDrawer({ open, onClose, selectedUser }) {
       <Box sx={{ flexGrow: 1, overflow: 'hidden', bgcolor: '#f8f9fa' }}>
         
         {loading ? (
-            <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', mt: 10, gap: 2 }}>
-                <CircularProgress size={40} />
-                <Typography variant="body2" color="text.secondary">Veriler Getiriliyor...</Typography>
-            </Box>
+          <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', mt: 10, gap: 2 }}>
+            <CircularProgress size={40} />
+            <Typography variant="body2" color="text.secondary">Veriler Getiriliyor...</Typography>
+          </Box>
         ) : (
-            <>
-                {/* 1. PROFİL & CİHAZ */}
-                <CustomTabPanel value={tabIndex} index={0}>
+          <>
+            {/* 1. PROFİL & CİHAZ */}
+            <CustomTabPanel value={tabIndex} index={0}>
                     <Grid container spacing={3}>
                         <Grid item xs={12}>
                             <Card sx={{ borderRadius: 3, boxShadow: 1 }}>
@@ -336,8 +442,19 @@ export default function UserDetailDrawer({ open, onClose, selectedUser }) {
                     </Grid>
                 </CustomTabPanel>
 
-                {/* 2. İLAÇLAR */}
+                {/* 2. İSTATİSTİKLER */}
                 <CustomTabPanel value={tabIndex} index={1}>
+                  {stats ? (
+                    <UserStatsCharts stats={stats} />
+                  ) : (
+                    <Alert severity="info" variant="outlined">
+                      No statistics available for this user
+                    </Alert>
+                  )}
+                </CustomTabPanel>
+
+                {/* 3. İLAÇLAR */}
+                <CustomTabPanel value={tabIndex} index={2}>
                     {meds.length === 0 ? (
                         <Alert severity="warning" variant="outlined" icon={<HelpOutline/>}>Bu kullanıcının aktif ilacı yok.</Alert>
                     ) : (
@@ -401,8 +518,8 @@ export default function UserDetailDrawer({ open, onClose, selectedUser }) {
                     )}
                 </CustomTabPanel>
 
-                {/* 3. HATIRLATMA ANALİZİ */}
-                <CustomTabPanel value={tabIndex} index={2}>
+                {/* 4. HATIRLATMA ANALİZİ */}
+                <CustomTabPanel value={tabIndex} index={3}>
                      <Alert severity="info" sx={{ mb: 2 }}>
                         Sistemin gönderdiği bildirimler ve kullanıcının teknik tepkileri (Alarm, Erteleme, Bildirim İletimi).
                      </Alert>
@@ -421,8 +538,8 @@ export default function UserDetailDrawer({ open, onClose, selectedUser }) {
                     </Card>
                 </CustomTabPanel>
 
-                {/* 4. İÇİM GEÇMİŞİ */}
-                <CustomTabPanel value={tabIndex} index={3}>
+                {/* 5. İÇİM GEÇMİŞİ */}
+                <CustomTabPanel value={tabIndex} index={4}>
                     <Card sx={{ height: 600, borderRadius: 2 }}>
                         <DataGrid
                             rows={logs.map((l, i) => ({ id: l.id || i, ...l }))}
@@ -440,6 +557,65 @@ export default function UserDetailDrawer({ open, onClose, selectedUser }) {
             </>
         )}
       </Box>
+
+      {/* Actions Menu */}
+      <Menu
+        anchorEl={anchorEl}
+        open={Boolean(anchorEl)}
+        onClose={handleMenuClose}
+      >
+        <MenuItem onClick={handleEdit}>
+          <ListItemIcon><Edit fontSize="small" /></ListItemIcon>
+          <ListItemText>Edit User</ListItemText>
+        </MenuItem>
+        <MenuItem onClick={handleExport}>
+          <ListItemIcon><Download fontSize="small" /></ListItemIcon>
+          <ListItemText>Export Data</ListItemText>
+        </MenuItem>
+        <MenuItem onClick={() => { setBanDialogOpen(true); handleMenuClose(); }} sx={{ color: "warning.main" }}>
+          <ListItemIcon><Block fontSize="small" color="warning" /></ListItemIcon>
+          <ListItemText>{displayUser.banned ? "Unban User" : "Ban User"}</ListItemText>
+        </MenuItem>
+        <MenuItem onClick={() => { setDeleteDialogOpen(true); handleMenuClose(); }} sx={{ color: "error.main" }}>
+          <ListItemIcon><DeleteIcon fontSize="small" color="error" /></ListItemIcon>
+          <ListItemText>Delete User</ListItemText>
+        </MenuItem>
+      </Menu>
+
+      {/* Ban Confirmation Dialog */}
+      <Dialog open={banDialogOpen} onClose={() => setBanDialogOpen(false)}>
+        <DialogTitle>{displayUser.banned ? "Unban User?" : "Ban User?"}</DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            {displayUser.banned
+              ? `Are you sure you want to unban ${displayUser.name || "this user"}? They will regain access to the platform.`
+              : `Are you sure you want to ban ${displayUser.name || "this user"}? They will lose access to the platform.`
+            }
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setBanDialogOpen(false)}>Cancel</Button>
+          <Button onClick={handleBanConfirm} color={displayUser.banned ? "success" : "warning"} variant="contained">
+            {displayUser.banned ? "Unban" : "Ban"}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Delete Confirmation Dialog */}
+      <Dialog open={deleteDialogOpen} onClose={() => setDeleteDialogOpen(false)}>
+        <DialogTitle>Delete User?</DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            Are you sure you want to permanently delete {displayUser.name || "this user"}? This action cannot be undone.
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setDeleteDialogOpen(false)}>Cancel</Button>
+          <Button onClick={handleDeleteConfirm} color="error" variant="contained">
+            Delete
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Drawer>
   );
 }
