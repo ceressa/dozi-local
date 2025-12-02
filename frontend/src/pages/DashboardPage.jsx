@@ -232,69 +232,7 @@ export default function DashboardPage() {
     // In a real app, you'd refetch data with the new date range
   };
 
-  // Loading state with skeletons
-  if (loading) {
-    return (
-      <Box sx={{ p: 2 }}>
-        <Skeleton variant="text" width={250} height={48} sx={{ mb: 3 }} />
-        <Grid container spacing={3} sx={{ mb: 4 }}>
-          {[1, 2, 3, 4].map((i) => (
-            <Grid item xs={12} sm={6} md={3} key={i}>
-              <StatCardSkeleton />
-            </Grid>
-          ))}
-        </Grid>
-        <Grid container spacing={3}>
-          <Grid item xs={12} md={8}>
-            <Card>
-              <CardContent>
-                <Skeleton variant="text" width={200} height={32} />
-                <Skeleton variant="rectangular" width="100%" height={300} sx={{ mt: 2 }} />
-              </CardContent>
-            </Card>
-          </Grid>
-          <Grid item xs={12} md={4}>
-            <Card>
-              <CardContent>
-                <Skeleton variant="text" width={180} height={32} />
-                <Skeleton variant="circular" width={180} height={180} sx={{ mx: "auto", mt: 2 }} />
-              </CardContent>
-            </Card>
-          </Grid>
-        </Grid>
-      </Box>
-    );
-  }
-
-  // Error state
-  if (error) {
-    return (
-      <Box sx={{ p: 2 }}>
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-        >
-          <Alert
-            severity="error"
-            icon={<ErrorOutline />}
-            action={
-              <Button color="inherit" size="small" onClick={() => handleRefresh()}>
-                Retry
-              </Button>
-            }
-            sx={{ mb: 3 }}
-          >
-            <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
-              Failed to load dashboard
-            </Typography>
-            <Typography variant="body2">{error}</Typography>
-          </Alert>
-        </motion.div>
-      </Box>
-    );
-  }
-
-  // DÜZELTME 2: Veri parçalama (Destructuring)
+  // DÜZELTME 2: Veri parçalama (Destructuring) - HOOK'LARDAN ÖNCE
   // Backend yapısı: { summary: {...}, charts: {...} }
   const summary = data?.summary || {};
   const charts = data?.charts || {};
@@ -392,6 +330,68 @@ export default function DashboardPage() {
       default: return "Last 7 Days";
     }
   }, [dateRange]);
+
+  // Loading state with skeletons
+  if (loading) {
+    return (
+      <Box sx={{ p: 2 }}>
+        <Skeleton variant="text" width={250} height={48} sx={{ mb: 3 }} />
+        <Grid container spacing={3} sx={{ mb: 4 }}>
+          {[1, 2, 3, 4].map((i) => (
+            <Grid item xs={12} sm={6} md={3} key={i}>
+              <StatCardSkeleton />
+            </Grid>
+          ))}
+        </Grid>
+        <Grid container spacing={3}>
+          <Grid item xs={12} md={8}>
+            <Card>
+              <CardContent>
+                <Skeleton variant="text" width={200} height={32} />
+                <Skeleton variant="rectangular" width="100%" height={300} sx={{ mt: 2 }} />
+              </CardContent>
+            </Card>
+          </Grid>
+          <Grid item xs={12} md={4}>
+            <Card>
+              <CardContent>
+                <Skeleton variant="text" width={180} height={32} />
+                <Skeleton variant="circular" width={180} height={180} sx={{ mx: "auto", mt: 2 }} />
+              </CardContent>
+            </Card>
+          </Grid>
+        </Grid>
+      </Box>
+    );
+  }
+
+  // Error state
+  if (error) {
+    return (
+      <Box sx={{ p: 2 }}>
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+        >
+          <Alert
+            severity="error"
+            icon={<ErrorOutline />}
+            action={
+              <Button color="inherit" size="small" onClick={() => handleRefresh()}>
+                Retry
+              </Button>
+            }
+            sx={{ mb: 3 }}
+          >
+            <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
+              Failed to load dashboard
+            </Typography>
+            <Typography variant="body2">{error}</Typography>
+          </Alert>
+        </motion.div>
+      </Box>
+    );
+  }
 
   return (
     <Box sx={{ p: 2 }}>
