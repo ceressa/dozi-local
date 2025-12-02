@@ -199,6 +199,17 @@ export default function UsersPage({ filter = "all-users" }) {
     setDrawerOpen(true);
   }, []);
 
+  // --- FILTERING WITH DEBOUNCED SEARCH ---
+  const filteredRows = useMemo(() => {
+    return rows.filter((row) => {
+      const searchLower = debouncedSearch.toLowerCase();
+      return (
+        (row.name && row.name.toLowerCase().includes(searchLower)) ||
+        (row.email && row.email.toLowerCase().includes(searchLower))
+      );
+    });
+  }, [rows, debouncedSearch]);
+
   const handleExport = useCallback(() => {
     if (!filteredRows || filteredRows.length === 0) {
       toast.error("No data to export");
@@ -224,17 +235,6 @@ export default function UsersPage({ filter = "all-users" }) {
 
     toast.success(`Exported ${filteredRows.length} users`);
   }, [filteredRows, filter]);
-
-  // --- FILTERING WITH DEBOUNCED SEARCH ---
-  const filteredRows = useMemo(() => {
-    return rows.filter((row) => {
-      const searchLower = debouncedSearch.toLowerCase();
-      return (
-        (row.name && row.name.toLowerCase().includes(searchLower)) ||
-        (row.email && row.email.toLowerCase().includes(searchLower))
-      );
-    });
-  }, [rows, debouncedSearch]);
 
   // Memoized columns
   const columns = useMemo(() => [
