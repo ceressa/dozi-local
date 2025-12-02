@@ -338,6 +338,51 @@ export default function DashboardPage() {
       : 0;
   }, [summary]);
 
+  // Notification Effectiveness
+  const notificationEffectiveness = useMemo(() => {
+    return summary.notificationSent && summary.notificationRead
+      ? Math.round((summary.notificationRead / summary.notificationSent) * 100)
+      : 0;
+  }, [summary]);
+
+  // Quick Insights - Memoized
+  const insights = useMemo(() => {
+    if (!charts.dailyHistory || charts.dailyHistory.length === 0) return null;
+
+    const dailyData = charts.dailyHistory;
+
+    // Best and worst day
+    const dayWithMostTaken = dailyData.reduce((max, day) =>
+      day.taken > max.taken ? day : max, dailyData[0]);
+    const dayWithMostMissed = dailyData.reduce((max, day) =>
+      (day.missed || 0) > (max.missed || 0) ? day : max, dailyData[0]);
+
+    // Peak hour
+    const hourlyData = charts.hourlyActivity || [];
+    const peakHour = hourlyData.reduce((max, hour) =>
+      hour.value > max.value ? hour : max, hourlyData[0]);
+
+    // Weekly trend (comparing first 3 days vs last 3 days)
+    const firstHalf = dailyData.slice(0, 3);
+    const secondHalf = dailyData.slice(-3);
+    const firstHalfAvg = firstHalf.reduce((sum, d) => sum + d.taken, 0) / firstHalf.length;
+    const secondHalfAvg = secondHalf.reduce((sum, d) => sum + d.taken, 0) / secondHalf.length;
+    const trend = secondHalfAvg > firstHalfAvg ? "improving" :
+                  secondHalfAvg < firstHalfAvg ? "declining" : "stable";
+    const trendPercent = Math.round(Math.abs((secondHalfAvg - firstHalfAvg) / firstHalfAvg * 100)) || 0;
+
+    return {
+      bestDay: dayWithMostTaken.date,
+      bestDayCount: dayWithMostTaken.taken,
+      worstDay: dayWithMostMissed.date,
+      worstDayCount: dayWithMostMissed.missed || 0,
+      peakHour: peakHour.hour,
+      peakHourCount: peakHour.value,
+      trend,
+      trendPercent
+    };
+  }, [charts]);
+
   // Date range label
   const dateRangeLabel = useMemo(() => {
     switch(dateRange) {
@@ -440,6 +485,119 @@ export default function DashboardPage() {
         ))}
       </Grid>
 
+      {/* QUICK INSIGHTS */}
+      {insights && (
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.5, delay: 0.4 }}
+        >
+          <Grid container spacing={3} sx={{ mb: 4 }}>
+            {/* Best Day */}
+            <Grid item xs={12} sm={6} md={3}>
+              <Card sx={{
+                background: `linear-gradient(135deg, #10B981 0%, #059669 100%)`,
+                color: 'white',
+                height: '100%'
+              }}>
+                <CardContent>
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+                    <TrendingUp sx={{ fontSize: 20 }} />
+                    <Typography variant="caption" sx={{ opacity: 0.9 }}>
+                      Best Day
+                    </Typography>
+                  </Box>
+                  <Typography variant="h5" sx={{ fontWeight: 700 }}>
+                    {insights.bestDay}
+                  </Typography>
+                  <Typography variant="body2" sx={{ opacity: 0.9, mt: 0.5 }}>
+                    {insights.bestDayCount} medications taken
+                  </Typography>
+                </CardContent>
+              </Card>
+            </Grid>
+
+            {/* Peak Hour */}
+            <Grid item xs={12} sm={6} md={3}>
+              <Card sx={{
+                background: `linear-gradient(135deg, #6366F1 0%, #4F46E5 100%)`,
+                color: 'white',
+                height: '100%'
+              }}>
+                <CardContent>
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+                    <DateRange sx={{ fontSize: 20 }} />
+                    <Typography variant="caption" sx={{ opacity: 0.9 }}>
+                      Peak Hour
+                    </Typography>
+                  </Box>
+                  <Typography variant="h5" sx={{ fontWeight: 700 }}>
+                    {insights.peakHour}
+                  </Typography>
+                  <Typography variant="body2" sx={{ opacity: 0.9, mt: 0.5 }}>
+                    {insights.peakHourCount} medications
+                  </Typography>
+                </CardContent>
+              </Card>
+            </Grid>
+
+            {/* Notification Effectiveness */}
+            <Grid item xs={12} sm={6} md={3}>
+              <Card sx={{
+                background: `linear-gradient(135deg, #F59E0B 0%, #D97706 100%)`,
+                color: 'white',
+                height: '100%'
+              }}>
+                <CardContent>
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+                    <NotificationsActive sx={{ fontSize: 20 }} />
+                    <Typography variant="caption" sx={{ opacity: 0.9 }}>
+                      Notification Rate
+                    </Typography>
+                  </Box>
+                  <Typography variant="h5" sx={{ fontWeight: 700 }}>
+                    {notificationEffectiveness}%
+                  </Typography>
+                  <Typography variant="body2" sx={{ opacity: 0.9, mt: 0.5 }}>
+                    {summary.notificationRead || 0} / {summary.notificationSent || 0} read
+                  </Typography>
+                </CardContent>
+              </Card>
+            </Grid>
+
+            {/* Weekly Trend */}
+            <Grid item xs={12} sm={6} md={3}>
+              <Card sx={{
+                background: insights.trend === "improving"
+                  ? `linear-gradient(135deg, #10B981 0%, #059669 100%)`
+                  : insights.trend === "declining"
+                  ? `linear-gradient(135deg, #EF4444 0%, #DC2626 100%)`
+                  : `linear-gradient(135deg, #64748B 0%, #475569 100%)`,
+                color: 'white',
+                height: '100%'
+              }}>
+                <CardContent>
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+                    {insights.trend === "improving" ? <TrendingUp sx={{ fontSize: 20 }} /> :
+                     insights.trend === "declining" ? <TrendingDown sx={{ fontSize: 20 }} /> :
+                     <TrendingUp sx={{ fontSize: 20 }} />}
+                    <Typography variant="caption" sx={{ opacity: 0.9 }}>
+                      Weekly Trend
+                    </Typography>
+                  </Box>
+                  <Typography variant="h5" sx={{ fontWeight: 700, textTransform: 'capitalize' }}>
+                    {insights.trend}
+                  </Typography>
+                  <Typography variant="body2" sx={{ opacity: 0.9, mt: 0.5 }}>
+                    {insights.trendPercent > 0 ? `${insights.trendPercent}% ${insights.trend === "improving" ? "increase" : "decrease"}` : "No change"}
+                  </Typography>
+                </CardContent>
+              </Card>
+            </Grid>
+          </Grid>
+        </motion.div>
+      )}
+
       {/* GRAFİKLER */}
       <Grid container spacing={3} sx={{ mb: 4 }}>
         
@@ -470,6 +628,10 @@ export default function DashboardPage() {
                         <stop offset="5%" stopColor="#F59E0B" stopOpacity={0.3} />
                         <stop offset="95%" stopColor="#F59E0B" stopOpacity={0} />
                       </linearGradient>
+                      <linearGradient id="colorMissed" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="#EF4444" stopOpacity={0.3} />
+                        <stop offset="95%" stopColor="#EF4444" stopOpacity={0} />
+                      </linearGradient>
                     </defs>
                     <CartesianGrid strokeDasharray="3 3" stroke={theme.palette.divider} />
                     <XAxis dataKey="date" stroke={theme.palette.text.secondary} />
@@ -484,6 +646,7 @@ export default function DashboardPage() {
                     <Legend />
                     <Area type="monotone" dataKey="taken" name="Taken" stroke="#10B981" fill="url(#colorTaken)" strokeWidth={2} />
                     <Area type="monotone" dataKey="skipped" name="Skipped" stroke="#F59E0B" fill="url(#colorSkipped)" strokeWidth={2} />
+                    <Area type="monotone" dataKey="missed" name="Missed" stroke="#EF4444" fill="url(#colorMissed)" strokeWidth={2} />
                   </AreaChart>
                 </ResponsiveContainer>
               </CardContent>
@@ -547,10 +710,10 @@ export default function DashboardPage() {
       </Grid>
 
       {/* ALT SATIR: Saatlik Dağılım & Kullanıcılar */}
-      <Grid container spacing={3}>
+      <Grid container spacing={3} sx={{ mb: 4 }}>
         {/* 3. SAATLİK AKTİVİTE (Bar Chart) */}
         {/* DÜZELTME 5: 'charts.hourlyActivity' bağlandı */}
-        <Grid item xs={12} md={6}>
+        <Grid item xs={12} md={4}>
           <motion.div
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
@@ -580,12 +743,50 @@ export default function DashboardPage() {
           </motion.div>
         </Grid>
 
-        {/* 4. SON KULLANICILAR */}
-        <Grid item xs={12} md={6}>
+        {/* 4. TIME OF DAY ADHERENCE (Radar Chart) */}
+        <Grid item xs={12} md={4}>
           <motion.div
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.5, delay: 0.7 }}
+          >
+            <Card sx={{ height: "100%" }}>
+              <CardContent>
+                <Typography variant="h6" sx={{ fontWeight: 600, mb: 3 }}>
+                  Time of Day Pattern
+                </Typography>
+                <ResponsiveContainer width="100%" height={250}>
+                  <RadarChart data={charts.timeOfDayAdherence || []}>
+                    <PolarGrid stroke={theme.palette.divider} />
+                    <PolarAngleAxis dataKey="category" stroke={theme.palette.text.secondary} />
+                    <PolarRadiusAxis stroke={theme.palette.text.secondary} />
+                    <Radar
+                      name="Medications"
+                      dataKey="value"
+                      stroke={theme.palette.primary.main}
+                      fill={theme.palette.primary.main}
+                      fillOpacity={0.6}
+                    />
+                    <Tooltip
+                      contentStyle={{
+                        backgroundColor: theme.palette.background.paper,
+                        border: `1px solid ${theme.palette.divider}`,
+                        borderRadius: 8
+                      }}
+                    />
+                  </RadarChart>
+                </ResponsiveContainer>
+              </CardContent>
+            </Card>
+          </motion.div>
+        </Grid>
+
+        {/* 5. SON KULLANICILAR */}
+        <Grid item xs={12} md={4}>
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.5, delay: 0.8 }}
           >
             <Card>
               <CardContent>
@@ -676,6 +877,151 @@ export default function DashboardPage() {
                 </Box>
               </CardContent>
             </Card>
+          </motion.div>
+        </Grid>
+      </Grid>
+
+      {/* ADDITIONAL ANALYTICS ROW */}
+      <Grid container spacing={3} sx={{ mb: 4 }}>
+        {/* Status Distribution Pie Chart */}
+        <Grid item xs={12} md={6}>
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.5, delay: 0.9 }}
+          >
+            <Card>
+              <CardContent>
+                <Typography variant="h6" sx={{ fontWeight: 600, mb: 3 }}>
+                  Medication Status Distribution
+                </Typography>
+                <ResponsiveContainer width="100%" height={300}>
+                  <PieChart>
+                    <Pie
+                      data={charts.statusDistribution || []}
+                      cx="50%"
+                      cy="50%"
+                      labelLine={false}
+                      label={({ name, percent }) => `${name}: ${(percent * 100).toFixed(0)}%`}
+                      outerRadius={100}
+                      fill="#8884d8"
+                      dataKey="value"
+                    >
+                      {(charts.statusDistribution || []).map((entry, index) => (
+                        <Cell key={`cell-${index}`} fill={entry.color} />
+                      ))}
+                    </Pie>
+                    <Tooltip
+                      contentStyle={{
+                        backgroundColor: theme.palette.background.paper,
+                        border: `1px solid ${theme.palette.divider}`,
+                        borderRadius: 8
+                      }}
+                    />
+                    <Legend />
+                  </PieChart>
+                </ResponsiveContainer>
+              </CardContent>
+            </Card>
+          </motion.div>
+        </Grid>
+
+        {/* Summary Metrics Grid */}
+        <Grid item xs={12} md={6}>
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.5, delay: 1.0 }}
+          >
+            <Grid container spacing={2} sx={{ height: '100%' }}>
+              {/* Compliance Score */}
+              <Grid item xs={6}>
+                <Card sx={{
+                  height: '100%',
+                  background: complianceRate >= 80
+                    ? 'linear-gradient(135deg, #10B981 0%, #059669 100%)'
+                    : complianceRate >= 60
+                    ? 'linear-gradient(135deg, #F59E0B 0%, #D97706 100%)'
+                    : 'linear-gradient(135deg, #EF4444 0%, #DC2626 100%)',
+                  color: 'white'
+                }}>
+                  <CardContent sx={{ p: 2 }}>
+                    <Typography variant="caption" sx={{ opacity: 0.9, display: 'block', mb: 1 }}>
+                      Compliance Score
+                    </Typography>
+                    <Typography variant="h4" sx={{ fontWeight: 700, mb: 1 }}>
+                      {complianceRate}%
+                    </Typography>
+                    <Chip
+                      label={
+                        complianceRate >= 80 ? "Excellent" :
+                        complianceRate >= 60 ? "Good" : "Needs Work"
+                      }
+                      size="small"
+                      sx={{
+                        backgroundColor: 'rgba(255,255,255,0.2)',
+                        color: 'white',
+                        fontWeight: 600
+                      }}
+                    />
+                  </CardContent>
+                </Card>
+              </Grid>
+
+              {/* Total Actions */}
+              <Grid item xs={6}>
+                <Card sx={{ height: '100%' }}>
+                  <CardContent sx={{ p: 2 }}>
+                    <Typography variant="caption" sx={{ opacity: 0.7, display: 'block', mb: 1 }}>
+                      Total Actions
+                    </Typography>
+                    <Typography variant="h4" sx={{ fontWeight: 700, mb: 1 }}>
+                      {summary.totalMedicationLogs || 0}
+                    </Typography>
+                    <Typography variant="caption" sx={{ opacity: 0.6 }}>
+                      All medication logs
+                    </Typography>
+                  </CardContent>
+                </Card>
+              </Grid>
+
+              {/* Success Rate */}
+              <Grid item xs={6}>
+                <Card sx={{ height: '100%' }}>
+                  <CardContent sx={{ p: 2 }}>
+                    <Typography variant="caption" sx={{ opacity: 0.7, display: 'block', mb: 1 }}>
+                      Taken Successfully
+                    </Typography>
+                    <Typography variant="h4" sx={{ fontWeight: 700, mb: 1, color: '#10B981' }}>
+                      {summary.taken || 0}
+                    </Typography>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                      <TrendingUp sx={{ fontSize: 14, color: '#10B981' }} />
+                      <Typography variant="caption" sx={{ opacity: 0.6 }}>
+                        medications
+                      </Typography>
+                    </Box>
+                  </CardContent>
+                </Card>
+              </Grid>
+
+              {/* Issues Count */}
+              <Grid item xs={6}>
+                <Card sx={{ height: '100%' }}>
+                  <CardContent sx={{ p: 2 }}>
+                    <Typography variant="caption" sx={{ opacity: 0.7, display: 'block', mb: 1 }}>
+                      Issues Detected
+                    </Typography>
+                    <Typography variant="h4" sx={{ fontWeight: 700, mb: 1, color: '#EF4444' }}>
+                      {(summary.missed || 0) + (summary.skipped || 0)}
+                    </Typography>
+                    <Typography variant="caption" sx={{ opacity: 0.6 }}>
+                      missed + skipped
+                    </Typography>
+                  </CardContent>
+                </Card>
+              </Grid>
+            </Grid>
           </motion.div>
         </Grid>
       </Grid>
