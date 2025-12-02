@@ -41,6 +41,36 @@ const formatDate = (timestamp) => {
     return new Date(Number(timestamp)).toLocaleDateString("tr-TR") + " " + formatTime(timestamp);
 };
 
+// Firestore timestamp'i Date'e çevir
+const parseFirestoreDate = (val) => {
+  if (!val) return null;
+
+  if (typeof val === 'object' && val !== null && val._seconds) {
+    return new Date(val._seconds * 1000);
+  } else if (typeof val === 'number') {
+    return new Date(val);
+  } else if (typeof val === 'string') {
+    return new Date(val);
+  }
+
+  return null;
+};
+
+// Saat karşılaştırma (±threshold dakika)
+const isTimeClose = (time1, time2, minuteThreshold) => {
+  try {
+    const [h1, m1] = time1.split(':').map(Number);
+    const [h2, m2] = time2.split(':').map(Number);
+
+    const totalMin1 = h1 * 60 + m1;
+    const totalMin2 = h2 * 60 + m2;
+
+    return Math.abs(totalMin1 - totalMin2) <= minuteThreshold;
+  } catch {
+    return false;
+  }
+};
+
 // Toolbar
 function CustomToolbar() {
   return (
@@ -94,87 +124,128 @@ export default function AdvancedRemindersPage() {
              });
         });
 
-        // --- 2. AKILLI ANALİZ (DEDEKTİF MODU) ---
-        // Sadece trigger'ları bulup session oluşturuyoruz
-        const triggers = logs.filter(l => 
-            l.eventType === "ALARM_TRIGGERED" || 
-            l.eventType === "NOTIFICATION_SENT"
-        );
+        // --- 2. SCHEDULE-BASED ANALİZ ---
+        // Her ilaç için schedule-based analiz yap
+        meds.forEach(med => {
+          if (!med.times || med.times.length === 0) return;
 
-        // Çift kayıtları temizle
-        const processedKeys = new Set();
-        // Ham veriyi işlemeden önce sıralayalım
-        triggers.sort((a, b) => b.timestamp - a.timestamp); 
+          // Her hatırlatma saati için
+          med.times.forEach(time => {
+            // Bu ilacın bu saatine ait logları bul
+            const relevantLogs = logs.filter(log => {
+              const logMedId = log.medicineId || log.medId;
+              if (logMedId !== med.id) return false;
 
-        triggers.forEach(trigger => {
-            const dateObj = new Date(Number(trigger.timestamp));
-            // Key: YYYY-MM-DD HH:MM
-            const timeKey = `${dateObj.getFullYear()}-${dateObj.getMonth()}-${dateObj.getDate()} ${dateObj.getHours()}:${dateObj.getMinutes()}`;
+              // Saat bilgisi varsa kontrol et
+              if (log.scheduledTime || log.reminderTime) {
+                const logTime = log.scheduledTime || log.reminderTime;
+                if (logTime === time) return true;
+              }
 
-            if (!processedKeys.has(timeKey)) {
-                processedKeys.add(timeKey);
+              // Saat bilgisi yoksa, log zamanına bak (±15 dakika)
+              const logDate = parseFirestoreDate(log.createdAt || log.timestamp);
+              if (logDate && !isNaN(logDate.getTime())) {
+                const logHour = String(logDate.getHours()).padStart(2, '0');
+                const logMinute = String(logDate.getMinutes()).padStart(2, '0');
+                const logTimeStr = `${logHour}:${logMinute}`;
 
-                // İlgili ilacı bul (Silinmişse ismini logdan al)
-                const medName = meds.find(m => m.id === trigger.medicineId)?.name || trigger.medicineName || "Silinmiş İlaç";
+                if (isTimeClose(time, logTimeStr, 15)) return true;
+              }
 
-                // --- 2 SAATLİK PENCERE ANALİZİ ---
-                const start = trigger.timestamp - 60000; // -1 dk
-                const end = trigger.timestamp + (2 * 60 * 60 * 1000); // +2 saat
+              return false;
+            });
 
-                // Sadece bu ilaca ve bu zamana ait loglar
-                const relatedLogs = logs.filter(l => 
-                    l.medicineId === trigger.medicineId && 
-                    l.timestamp >= start && 
-                    l.timestamp <= end
-                );
+            // Log'ları tarihe göre grupla
+            const logsByDate = {};
+            relevantLogs.forEach(log => {
+              const logDate = parseFirestoreDate(log.createdAt || log.timestamp);
+              if (!logDate || isNaN(logDate.getTime())) return;
 
-                const alarmLog = relatedLogs.find(l => l.eventType === "ALARM_TRIGGERED");
-                const notifLog = relatedLogs.find(l => l.eventType === "NOTIFICATION_SENT");
-                const takenLog = relatedLogs.find(l => l.eventType.includes("TAKEN"));
-                const missedLog = relatedLogs.find(l => l.eventType.includes("MISSED"));
-                
-                // --- GÜVEN SKORU ---
-                let deliveryStatus = "UNKNOWN";
-                let notificationId = notifLog?.metadata?.notificationId || trigger.metadata?.notificationId;
+              const dateKey = logDate.toISOString().split('T')[0]; // YYYY-MM-DD
 
-                if (notificationId) {
-                    if (alarmLog) deliveryStatus = "DELIVERED_OS"; 
-                    else deliveryStatus = "DELIVERED_UNK_WAKE";
-                } else if (alarmLog && !notifLog) {
-                    deliveryStatus = "FAILED_APP";
+              if (!logsByDate[dateKey]) {
+                logsByDate[dateKey] = [];
+              }
+              logsByDate[dateKey].push(log);
+            });
+
+            // Her gün için analiz (Son 30 gün)
+            Object.keys(logsByDate).sort().reverse().slice(0, 30).forEach(dateKey => {
+              const dayLogs = logsByDate[dateKey];
+
+              // Bildirim gönderildi mi?
+              const notificationLog = dayLogs.find(l =>
+                (l.eventType || l.type || '').toUpperCase().includes('NOTIFICATION_SENT') ||
+                (l.eventType || l.type || '').toUpperCase().includes('SENT')
+              );
+
+              let notificationStatus = 'not-sent';
+              let notificationError = null;
+
+              if (notificationLog) {
+                if (notificationLog.success === false || notificationLog.error) {
+                  notificationStatus = 'failed';
+                  notificationError = notificationLog.error || notificationLog.errorMessage || 'Unknown error';
+                } else {
+                  notificationStatus = 'sent';
                 }
+              }
 
-                // --- SONUÇ ---
-                let finalResult = "Bekleniyor...";
-                let resultColor = "default";
+              // Kullanıcı ne yaptı?
+              const userAction = dayLogs.find(l => {
+                const type = (l.eventType || l.type || '').toUpperCase();
+                return type === 'TAKEN' || type.includes('MEDICATION_TAKEN') ||
+                       type === 'MISSED' || type.includes('MEDICATION_MISSED') ||
+                       type === 'SKIPPED' || type.includes('MEDICATION_SKIPPED') ||
+                       type.includes('SNOOZE');
+              });
 
-                if (takenLog) {
-                    finalResult = "✅ İlaç Alındı";
-                    resultColor = "success";
-                } else if (missedLog) {
-                    if (deliveryStatus === "DELIVERED_OS") {
-                        finalResult = "⛔ Kullanıcı Yanıt Vermedi";
-                        resultColor = "warning";
-                    } else if (deliveryStatus === "FAILED_APP") {
-                        finalResult = "❌ Gönderilemediği için Kaçtı";
-                        resultColor = "error";
-                    } else {
-                         finalResult = "❓ Yanıtsız";
-                    }
+              let action = 'no-action';
+              let actionLabel = 'Aksiyon Yok';
+              let actionColor = 'default';
+
+              if (userAction) {
+                const type = (userAction.eventType || userAction.type || '').toUpperCase();
+                if (type === 'TAKEN' || type.includes('MEDICATION_TAKEN')) {
+                  action = 'taken';
+                  actionLabel = '✅ İlaç Alındı';
+                  actionColor = 'success';
+                } else if (type === 'MISSED' || type.includes('MEDICATION_MISSED')) {
+                  action = 'missed';
+                  actionLabel = '❌ Kaçırıldı';
+                  actionColor = 'error';
+                } else if (type === 'SKIPPED' || type.includes('MEDICATION_SKIPPED')) {
+                  action = 'skipped';
+                  actionLabel = '⚠️ Atladı';
+                  actionColor = 'warning';
+                } else if (type.includes('SNOOZE')) {
+                  action = 'snoozed';
+                  actionLabel = '⏰ Erteledi';
+                  actionColor = 'info';
                 }
+              }
 
-                sessions.push({
-                    id: trigger.id,
-                    timestamp: Number(trigger.timestamp), // SAYI OLARAK SAKLA
-                    userName: user.name,
-                    medicineName: medName,
-                    deviceInfo: `${trigger.deviceModel || '-'}`,
-                    deliveryStatus,
-                    notificationId,
-                    result: finalResult,
-                    resultColor
-                });
-            }
+              // Notification ID
+              const notificationId = notificationLog?.metadata?.notificationId || dayLogs.find(l => l.metadata?.notificationId)?.metadata?.notificationId;
+
+              sessions.push({
+                id: `${user.uid || userBlock.userId}-${dateKey}-${time}-${med.id}`,
+                timestamp: new Date(dateKey + 'T' + time + ':00').getTime(),
+                date: dateKey,
+                time: time,
+                userName: user.name || 'Bilinmiyor',
+                userId: userBlock.userId,
+                medicineName: med.name,
+                notificationStatus,
+                notificationError,
+                action,
+                actionLabel,
+                actionColor,
+                notificationId,
+                logCount: dayLogs.length
+              });
+            });
+          });
         });
       });
 
@@ -218,47 +289,84 @@ export default function AdvancedRemindersPage() {
 
   // --- KOLONLAR: ANALİZ ---
   const analysisColumns = [
-    { 
-        field: "timestamp", 
-        headerName: "Planlanan Tarih", 
-        width: 160, 
-        type: 'number',
-        valueFormatter: (params) => formatDate(params.value) 
-    },
-    { field: "userName", headerName: "Kullanıcı", width: 130 },
-    { field: "medicineName", headerName: "İlaç", width: 140 },
     {
-        field: "deliveryStatus",
-        headerName: "İletim Analizi (Teknik)",
-        width: 280,
-        renderCell: (params) => {
-            const { deliveryStatus, notificationId } = params.row;
-            if (deliveryStatus === "DELIVERED_OS") {
-                return (
-                    <Tooltip title={`Android ID: ${notificationId}`}>
-                        <Chip icon={<WifiTethering />} label="Cihaza Ulaştı" color="success" variant="outlined" size="small" />
-                    </Tooltip>
-                );
-            } else if (deliveryStatus === "FAILED_APP") {
-                 return <Chip icon={<ErrorIcon />} label="HATA: Oluşturulamadı" color="error" size="small" />;
-            } 
-            return <Chip label="Belirsiz" size="small" />;
+        field: "date",
+        headerName: "Tarih",
+        width: 120,
+        valueFormatter: (params) => {
+          const date = new Date(params.value);
+          return date.toLocaleDateString('tr-TR', { day: '2-digit', month: '2-digit', year: 'numeric' });
         }
     },
     {
-        field: "result",
-        headerName: "Sonuç",
-        width: 220,
+        field: "time",
+        headerName: "Saat",
+        width: 80
+    },
+    { field: "userName", headerName: "Kullanıcı", width: 140 },
+    { field: "medicineName", headerName: "İlaç", width: 150 },
+    {
+        field: "notificationStatus",
+        headerName: "Bildirim Durumu",
+        width: 200,
+        renderCell: (params) => {
+            const status = params.value;
+
+            if (status === 'sent') {
+              return <Chip icon={<CheckCircle />} label="✓ Gönderildi" color="success" size="small" sx={{ fontWeight: 600 }} />;
+            } else if (status === 'failed') {
+              return <Chip icon={<ErrorIcon />} label="✗ Gönderilemedi" color="error" size="small" sx={{ fontWeight: 600 }} />;
+            } else {
+              return <Chip icon={<Warning />} label="? Bildirim Yok" color="default" size="small" />;
+            }
+        }
+    },
+    {
+        field: "actionLabel",
+        headerName: "Kullanıcı Aksiyonu",
+        width: 180,
         renderCell: (params) => (
-            <Chip 
-                label={params.row.result} 
-                color={params.row.resultColor}
+            <Chip
+                label={params.value}
+                color={params.row.actionColor}
                 size="small"
-                icon={params.row.result.includes("Yanıt") ? <DoNotDisturbOn /> : params.row.result.includes("Alındı") ? <CheckCircle /> : <Info />}
+                variant={params.row.action === 'taken' ? 'filled' : 'outlined'}
             />
         )
     },
-    { field: "deviceInfo", headerName: "Cihaz", width: 150 },
+    {
+        field: "notificationError",
+        headerName: "Hata/Detay",
+        flex: 1,
+        minWidth: 200,
+        renderCell: (params) => {
+            const error = params.value;
+            const logCount = params.row.logCount || 0;
+
+            if (error) {
+              return (
+                <Tooltip title={error}>
+                  <Typography variant="caption" color="error.main" sx={{
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                    maxWidth: '100%',
+                    display: 'block',
+                    fontWeight: 600
+                  }}>
+                    {error}
+                  </Typography>
+                </Tooltip>
+              );
+            }
+
+            return (
+              <Typography variant="caption" color="text.secondary">
+                {logCount} olay kaydı
+              </Typography>
+            );
+        }
+    }
   ];
 
   return (
@@ -304,6 +412,10 @@ export default function AdvancedRemindersPage() {
       {tabIndex === 1 && (
         <Card sx={{ borderRadius: 2 }}>
              <CardContent>
+                 <Alert severity="info" sx={{ mb: 2 }} icon={<NotificationsActive />}>
+                    <strong>Schedule-Based Analiz:</strong> Her satır bir ilacın planlanmış hatırlatma saatini gösterir.
+                    Bildirim gönderildi mi? Kullanıcı ne yaptı? Hata var mı? Tüm detaylar burada.
+                 </Alert>
                  <Box sx={{ height: 750 }}>
                     <DataGrid
                         rows={analysisRows}
@@ -312,7 +424,7 @@ export default function AdvancedRemindersPage() {
                         loading={loading}
                         initialState={{
                             sorting: {
-                                sortModel: [{ field: 'timestamp', sort: 'desc' }],
+                                sortModel: [{ field: 'date', sort: 'desc' }],
                             },
                             pagination: { paginationModel: { pageSize: 50 } },
                         }}
