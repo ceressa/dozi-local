@@ -303,13 +303,23 @@ export default function UserDetailDrawer({ open, onClose, selectedUser }) {
 
           // Saat bilgisi yoksa, log zamanına bak (aynı saat diliminde mi?)
           if (log.createdAt) {
-            const logDate = new Date(log.createdAt._seconds ? log.createdAt._seconds * 1000 : log.createdAt);
-            const logHour = String(logDate.getHours()).padStart(2, '0');
-            const logMinute = String(logDate.getMinutes()).padStart(2, '0');
-            const logTimeStr = `${logHour}:${logMinute}`;
+            let logDate;
+            if (typeof log.createdAt === 'object' && log.createdAt._seconds) {
+              logDate = new Date(log.createdAt._seconds * 1000);
+            } else if (typeof log.createdAt === 'number') {
+              logDate = new Date(log.createdAt);
+            } else if (typeof log.createdAt === 'string') {
+              logDate = new Date(log.createdAt);
+            }
 
-            // Saat ±15 dakika içindeyse eşleştir
-            if (isTimeClose(time, logTimeStr, 15)) return true;
+            if (logDate && !isNaN(logDate.getTime())) {
+              const logHour = String(logDate.getHours()).padStart(2, '0');
+              const logMinute = String(logDate.getMinutes()).padStart(2, '0');
+              const logTimeStr = `${logHour}:${logMinute}`;
+
+              // Saat ±15 dakika içindeyse eşleştir
+              if (isTimeClose(time, logTimeStr, 15)) return true;
+            }
           }
 
           return false;
@@ -318,7 +328,21 @@ export default function UserDetailDrawer({ open, onClose, selectedUser }) {
         // Log'ları tarihe göre grupla
         const logsByDate = {};
         relevantLogs.forEach(log => {
-          const logDate = new Date(log.createdAt._seconds ? log.createdAt._seconds * 1000 : log.createdAt);
+          if (!log.createdAt) return; // createdAt yoksa skip et
+
+          let logDate;
+          if (typeof log.createdAt === 'object' && log.createdAt._seconds) {
+            logDate = new Date(log.createdAt._seconds * 1000);
+          } else if (typeof log.createdAt === 'number') {
+            logDate = new Date(log.createdAt);
+          } else if (typeof log.createdAt === 'string') {
+            logDate = new Date(log.createdAt);
+          } else {
+            return; // Invalid date format, skip
+          }
+
+          if (isNaN(logDate.getTime())) return; // Invalid date, skip
+
           const dateKey = logDate.toISOString().split('T')[0]; // YYYY-MM-DD
 
           if (!logsByDate[dateKey]) {
