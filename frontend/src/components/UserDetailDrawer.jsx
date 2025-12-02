@@ -304,7 +304,7 @@ export default function UserDetailDrawer({ open, onClose, selectedUser }) {
           // Saat bilgisi yoksa, log zamanına bak (aynı saat diliminde mi?)
           if (log.createdAt) {
             let logDate;
-            if (typeof log.createdAt === 'object' && log.createdAt._seconds) {
+            if (typeof log.createdAt === 'object' && log.createdAt !== null && log.createdAt._seconds) {
               logDate = new Date(log.createdAt._seconds * 1000);
             } else if (typeof log.createdAt === 'number') {
               logDate = new Date(log.createdAt);
@@ -331,7 +331,7 @@ export default function UserDetailDrawer({ open, onClose, selectedUser }) {
           if (!log.createdAt) return; // createdAt yoksa skip et
 
           let logDate;
-          if (typeof log.createdAt === 'object' && log.createdAt._seconds) {
+          if (typeof log.createdAt === 'object' && log.createdAt !== null && log.createdAt._seconds) {
             logDate = new Date(log.createdAt._seconds * 1000);
           } else if (typeof log.createdAt === 'number') {
             logDate = new Date(log.createdAt);
