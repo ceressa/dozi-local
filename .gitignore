@@ -57,3 +57,6 @@ pnpm-lock.yaml
 *.temp
 tmp/
 temp/
+
+*.json
+*.abb
